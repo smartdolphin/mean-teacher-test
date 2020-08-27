@@ -11,18 +11,19 @@ import threading
 import time
 import logging
 import os
+import pickle as pkl
 
 from pandas import DataFrame
 from collections import defaultdict
 
 
 class TrainLog:
-    """Saves training logs in Pandas msgpacks"""
+    """Saves training logs in Pandas as pickle"""
 
     INCREMENTAL_UPDATE_TIME = 300
 
     def __init__(self, directory, name):
-        self.log_file_path = "{}/{}.msgpack".format(directory, name)
+        self.log_file_path = "{}/{}.pkl".format(directory, name)
         self._log = defaultdict(dict)
         self._log_lock = threading.RLock()
         self._last_update_time = time.time() - self.INCREMENTAL_UPDATE_TIME
@@ -35,7 +36,8 @@ class TrainLog:
 
     def save(self):
         df = self._as_dataframe()
-        df.to_msgpack(self.log_file_path, compress='zlib')
+        with open(self.log_file_path, 'wb') as f:
+            pkl.dump(df, f)
 
     def _record(self, step, col_val_dict):
         with self._log_lock:
