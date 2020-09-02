@@ -214,10 +214,7 @@ def train(train_loader, model, ema_model, optimizer, epoch, log):
     ema_model.train()
 
     end = time.time()
-    iteration = 0
     for i, ((input, ema_input), target) in enumerate(train_loader):
-        iteration += 1
-
         # measure data loading time
         meters.update('data_time', time.time() - end)
 
@@ -243,7 +240,7 @@ def train(train_loader, model, ema_model, optimizer, epoch, log):
             if isinstance(model_out, tuple):
                 output = model_out[0]
             # ramp up exp(-5(1 - t)^2)
-            coef = args.consis_coef * math.exp(-5 * (1 - min(iteration/args.warmup, 1))**2)
+            coef = args.consis_coef * math.exp(-5 * (1 - min(global_step/args.warmup, 1))**2)
             semi_loss = pl(input_var, output.detach(), model, mask) * coef
             meters.update('semi_loss', semi_loss.item())
         else:
