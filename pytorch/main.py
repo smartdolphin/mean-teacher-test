@@ -27,6 +27,7 @@ from mean_teacher import architectures, datasets, data, losses, ramps, cli
 from mean_teacher.run_context import RunContext
 from mean_teacher.data import NO_LABEL
 from mean_teacher.utils import *
+from mean_teacher.pseudo_label import PL
 
 
 LOG = logging.getLogger('main')
@@ -232,6 +233,13 @@ def train(train_loader, model, ema_model, optimizer, epoch, log):
         ema_model_out = ema_model(ema_input_var)
         model_out = model(input_var)
 
+        if args.pseudo_label:
+            pl = PL(n_classes=10, threshold=0.95, soft=True)
+            mask = (target_var == NO_LABEL).float()
+            if isinstance(model_out, tuple):
+                output = model_out[0]
+            semi_loss = pl(input_var, output.detach(), model, mask) * args.coef
+
         if isinstance(model_out, Variable):
             assert args.logit_distance_cost < 0
             logit1 = model_out
@@ -267,7 +275,7 @@ def train(train_loader, model, ema_model, optimizer, epoch, log):
             consistency_loss = 0
             meters.update('cons_loss', 0)
 
-        loss = class_loss + consistency_loss + res_loss
+        loss = class_loss + consistency_loss + res_loss + semi_loss
         assert not (np.isnan(loss.item()) or loss.item() > 1e5), 'Loss explosion: {}'.format(loss.item())
         meters.update('loss', loss.item())
 

@@ -179,6 +179,11 @@ class ResNet32x32(nn.Module):
         x = x.view(x.size(0), -1)
         return self.fc1(x), self.fc2(x)
 
+    def update_batch_stats(self, flag):
+        for m in self.modules():
+            if isinstance(m, nn.BatchNorm2d):
+                m.update_batch_stats = flag
+
 
 def conv3x3(in_planes, out_planes, stride=1):
     "3x3 convolution with padding"
