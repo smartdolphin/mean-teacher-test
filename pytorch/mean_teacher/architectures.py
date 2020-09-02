@@ -121,7 +121,8 @@ class ResNet224x224(nn.Module):
 
 
 class ResNet32x32(nn.Module):
-    def __init__(self, block, layers, channels, groups=1, num_classes=1000, downsample='basic'):
+    def __init__(self, block, layers, channels, groups=1, num_classes=1000, downsample='basic',
+                 dropout=0.):
         super().__init__()
         assert len(layers) == 3
         self.downsample_mode = downsample
@@ -134,11 +135,16 @@ class ResNet32x32(nn.Module):
         self.layer3 = self._make_layer(
             block, channels * 4, groups, layers[2], stride=2)
         self.avgpool = nn.AvgPool2d(8)
-        self.fc1 = nn.Linear(block.out_channels(
-            channels * 4, groups), num_classes)
-        self.fc2 = nn.Linear(block.out_channels(
-            channels * 4, groups), num_classes)
-
+        self.fc1 = nn.Sequential(
+            nn.Dropout(dropout),
+            nn.Linear(block.out_channels(
+                channels * 4, groups), num_classes)
+        )
+        self.fc2 = nn.Sequential(
+            nn.Dropout(dropout),
+            nn.Linear(block.out_channels(
+                channels * 4, groups), num_classes)
+        )
         for m in self.modules():
             if isinstance(m, nn.Conv2d):
                 n = m.kernel_size[0] * m.kernel_size[1] * m.out_channels

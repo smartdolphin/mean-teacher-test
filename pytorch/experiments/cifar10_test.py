@@ -54,8 +54,14 @@ def parameters():
         'pretrained': 'pretrained/ckpt_epoch_1700.pth',
 
         # Pseudo label
-        'coef': 1.0,
-        'pseudo-label': True
+        'consis_coef': 1.0,
+        'warmup': 200000,
+        'pseudo-label': True,
+
+        # Regularization
+        'reg': 'l2',
+        'dropout': 0.5,
+        'soft': True
     }
 
     # 4000 labels:

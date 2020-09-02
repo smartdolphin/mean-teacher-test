@@ -84,8 +84,11 @@ def create_parser():
     parser.add_argument('--pretrained', default=None, type=str, metavar='PATH',
                         help='pretrained model path (default: none)')
     parser.add_argument('--pseudo-label', default=False, type=str2bool, help='use pseudo label', metavar='BOOL')
-    parser.add_argument('--coef', default=1.0, type=float,
-                        help='semi-supervised loss ratio')
+    parser.add_argument('--consis-coef', default=1.0, type=float, help='semi-supervised loss ratio')
+    parser.add_argument('--warmup', default=200000, type=int, help='warmup')
+    parser.add_argument('--dropout', default=0., type=float, help='dropout rate')
+    parser.add_argument('--reg', default=None, type=str, help='L1/L2 regularization')
+    parser.add_argument('--soft', default=False, type=str2bool, help='soft regularization', metavar='BOOL')
 
     return parser
 

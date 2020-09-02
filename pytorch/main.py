@@ -50,21 +50,22 @@ def main(context):
     num_classes = dataset_config.pop('num_classes')
     train_loader, eval_loader = create_data_loaders(**dataset_config, args=args)
 
-    def create_model(ema=False):
+    def create_model(ema=False, reg=None):
         LOG.info("=> creating {pretrained}{ema}model '{arch}'".format(
             pretrained='pre-trained ' if args.pretrained is not None else '',
             ema='EMA ' if ema else '',
             arch=args.arch))
 
         model_factory = architectures.__dict__[args.arch]
-        model_params = dict(pretrained=args.pretrained, num_classes=num_classes)
+        model_params = dict(pretrained=args.pretrained, num_classes=num_classes, dropout=args.dropout)
+        if ema:
+            model_params['dropout'] = 0.
         model = model_factory(**model_params)
         model = nn.DataParallel(model).cuda()
 
         if ema:
             for param in model.parameters():
                 param.detach_()
-
         return model
 
     model = create_model()
@@ -213,7 +214,10 @@ def train(train_loader, model, ema_model, optimizer, epoch, log):
     ema_model.train()
 
     end = time.time()
+    iteration = 0
     for i, ((input, ema_input), target) in enumerate(train_loader):
+        iteration += 1
+
         # measure data loading time
         meters.update('data_time', time.time() - end)
 
@@ -234,11 +238,17 @@ def train(train_loader, model, ema_model, optimizer, epoch, log):
         model_out = model(input_var)
 
         if args.pseudo_label:
-            pl = PL(n_classes=10, threshold=0.95, soft=True)
+            pl = PL(n_classes=10, threshold=0.95, soft=args.soft)
             mask = (target_var == NO_LABEL).float()
             if isinstance(model_out, tuple):
                 output = model_out[0]
-            semi_loss = pl(input_var, output.detach(), model, mask) * args.coef
+            # ramp up exp(-5(1 - t)^2)
+            coef = args.consis_coef * math.exp(-5 * (1 - min(iteration/args.warmup, 1))**2)
+            semi_loss = pl(input_var, output.detach(), model, mask) * coef
+            meters.update('semi_loss', semi_loss.item())
+        else:
+            coef = 0
+            meters.update('semi_loss', 0.)
 
         if isinstance(model_out, Variable):
             assert args.logit_distance_cost < 0
@@ -276,6 +286,18 @@ def train(train_loader, model, ema_model, optimizer, epoch, log):
             meters.update('cons_loss', 0)
 
         loss = class_loss + consistency_loss + res_loss + semi_loss
+
+        # regularization for student model
+        if args.reg is not None:
+           for name, param in model.named_parameters():
+               if 'bias' not in name:
+                   if args.reg.lower() == 'l1':
+                       loss += torch.sum(torch.abs(param))
+                   elif args.reg.lower() == 'l2':
+                       loss += torch.sum(torch.pow(param, 2))
+                   else:
+                       raise Exception(f'Unknown regularization: {reg}')
+
         assert not (np.isnan(loss.item()) or loss.item() > 1e5), 'Loss explosion: {}'.format(loss.item())
         meters.update('loss', loss.item())
 
@@ -308,10 +330,12 @@ def train(train_loader, model, ema_model, optimizer, epoch, log):
                 'Time {meters[batch_time]:.3f}\t'
                 'Data {meters[data_time]:.3f}\t'
                 'Class {meters[class_loss]:.4f}\t'
+                'Semi {meters[semi_loss]:.4f}[{coef:.4f}]\t'
                 'Cons {meters[cons_loss]:.4f}\t'
+                'Res {meters[res_loss]:.4f}\t'
                 'Prec@1 {meters[top1]:.3f}\t'
                 'Prec@5 {meters[top5]:.3f}'.format(
-                    epoch, i, len(train_loader), meters=meters))
+                    epoch, i, len(train_loader), meters=meters, coef=coef))
             log.record(epoch + i / len(train_loader), {
                 'step': global_step,
                 **meters.values(),
