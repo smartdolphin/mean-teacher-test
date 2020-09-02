@@ -88,6 +88,7 @@ def create_parser():
     parser.add_argument('--warmup', default=200000, type=int, help='warmup')
     parser.add_argument('--dropout', default=0., type=float, help='dropout rate')
     parser.add_argument('--reg', default=None, type=str, help='L1/L2 regularization')
+    parser.add_argument('--reg_c', default=1e-6, type=float, help='regularization coeffienct')
     parser.add_argument('--soft', default=False, type=str2bool, help='soft regularization', metavar='BOOL')
 
     return parser

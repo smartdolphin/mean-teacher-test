@@ -292,9 +292,9 @@ def train(train_loader, model, ema_model, optimizer, epoch, log):
            for name, param in model.named_parameters():
                if 'bias' not in name:
                    if args.reg.lower() == 'l1':
-                       loss += torch.sum(torch.abs(param))
+                       loss += (args.reg_c * torch.sum(torch.abs(param)))
                    elif args.reg.lower() == 'l2':
-                       loss += torch.sum(torch.pow(param, 2))
+                       loss += (args.reg_c * torch.sum(torch.pow(param, 2)))
                    else:
                        raise Exception(f'Unknown regularization: {reg}')
 
