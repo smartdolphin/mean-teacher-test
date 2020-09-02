@@ -51,7 +51,11 @@ def parameters():
         'nesterov': True,
 
         # Pretrained
-        'pretrained': 'pretrained/ckpt_epoch_1700.pth'
+        'pretrained': 'pretrained/ckpt_epoch_1700.pth',
+
+        # Pseudo label
+        'coef': 1.0,
+        'pseudo-label': True
     }
 
     # 4000 labels:

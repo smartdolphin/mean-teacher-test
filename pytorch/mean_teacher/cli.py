@@ -83,7 +83,7 @@ def create_parser():
                         help='evaluate model on evaluation set')
     parser.add_argument('--pretrained', default=None, type=str, metavar='PATH',
                         help='pretrained model path (default: none)')
-    parser.add_argument('--pseudo-label', action='store_true', help='use pseudo label')
+    parser.add_argument('--pseudo-label', default=False, type=str2bool, help='use pseudo label', metavar='BOOL')
     parser.add_argument('--coef', default=1.0, type=float,
                         help='semi-supervised loss ratio')
 
