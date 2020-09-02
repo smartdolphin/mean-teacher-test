@@ -51,7 +51,7 @@ def main(context):
 
     def create_model(ema=False):
         LOG.info("=> creating {pretrained}{ema}model '{arch}'".format(
-            pretrained='pre-trained ' if args.pretrained else '',
+            pretrained='pre-trained ' if args.pretrained is not None else '',
             ema='EMA ' if ema else '',
             arch=args.arch))
 

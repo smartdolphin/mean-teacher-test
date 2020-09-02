@@ -81,8 +81,8 @@ def create_parser():
                         help='path to latest checkpoint (default: none)')
     parser.add_argument('-e', '--evaluate', type=str2bool,
                         help='evaluate model on evaluation set')
-    parser.add_argument('--pretrained', dest='pretrained', action='store_true',
-                        help='use pre-trained model')
+    parser.add_argument('--pretrained', default=None, type=str, metavar='PATH',
+                        help='pretrained model path (default: none)')
     return parser
 
 

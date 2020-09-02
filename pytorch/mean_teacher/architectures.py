@@ -8,6 +8,7 @@
 import sys
 import math
 import itertools
+from collections import OrderedDict
 
 import torch
 from torch import nn
@@ -18,17 +19,28 @@ from .utils import export, parameter_count
 
 
 @export
-def cifar_shakeshake26(pretrained=False, **kwargs):
-    assert not pretrained
+def cifar_shakeshake26(pretrained=None, **kwargs):
     model = ResNet32x32(ShakeShakeBlock,
                         layers=[4, 4, 4],
                         channels=96,
                         downsample='shift_conv', **kwargs)
+    if pretrained is not None:
+        ckpt = torch.load(pretrained, map_location='cpu')
+        state_dict = ckpt['model']
+        encoder_state_dict = OrderedDict()
+        for k, v in state_dict.items():
+            if 'head' not in k:
+                k = k.replace('module.', '')
+                if 'encoder' in k:
+                    k = k.replace('encoder.', '')
+                    encoder_state_dict[k] = v
+        model.load_state_dict(encoder_state_dict, strict=False)
+        print('Pre-trained weights loaded!')
     return model
 
 
 @export
-def resnext152(pretrained=False, **kwargs):
+def resnext152(pretrained=None, **kwargs):
     assert not pretrained
     model = ResNet224x224(BottleneckBlock,
                           layers=[3, 8, 36, 3],

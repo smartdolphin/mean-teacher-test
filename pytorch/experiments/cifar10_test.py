@@ -23,7 +23,7 @@ LOG = logging.getLogger('runner')
 def parameters():
     defaults = {
         # Technical details
-        'workers': 2,
+        'workers': 10,
         'checkpoint_epochs': 20,
 
         # Data
@@ -49,6 +49,9 @@ def parameters():
         'lr_rampup': 0,
         'base_lr': 0.05,
         'nesterov': True,
+
+        # Pretrained
+        'pretrained': 'pretrained/ckpt_epoch_1700.pth'
     }
 
     # 4000 labels:
