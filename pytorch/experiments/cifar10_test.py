@@ -32,7 +32,7 @@ def parameters():
         'eval_subdir': 'test',
 
         # Data sampling
-        'base_batch_size': 128,
+        'base_batch_size': 64,
         'base_labeled_batch_size': 31,
 
         # Architecture
@@ -61,23 +61,26 @@ def parameters():
         # Regularization
         'reg': 'l2',
         'dropout': 0.5,
-        'soft': True
+        'soft': True,
+
+        ## resume
+        #'resume': 'results/cifar10_test/2020-09-02_22:51:24/4000_10/transient/checkpoint.300.ckpt'
     }
 
     # 4000 labels:
-    for data_seed in range(10, 20):
+    for data_seed in range(10, 11):
         yield {
             **defaults,
             'title': '4000-label cifar-10',
             'n_labels': 4000,
             'data_seed': data_seed,
-            'epochs': 300,
-            'lr_rampdown_epochs': 350,
+            'epochs': 1000,
+            'lr_rampdown_epochs': 1350,
             'ema_decay': 0.99,
         }
 
     # 1000 labels:
-    for data_seed in range(10, 20):
+    for data_seed in range(10, 11):
         yield {
             **defaults,
             'title': '1000-label cifar-10',
