@@ -48,7 +48,7 @@ def main(context):
 
     dataset_config = datasets.__dict__[args.dataset]()
     num_classes = dataset_config.pop('num_classes')
-    train_loader, eval_loader = create_data_loaders(**dataset_config, args=args)
+    train_loader, noise_loader, eval_loader = create_data_loaders(**dataset_config, args=args)
 
     def create_model(ema=False, reg=None):
         LOG.info("=> creating {pretrained}{ema}model '{arch}'".format(
@@ -69,11 +69,16 @@ def main(context):
         return model
 
     model = create_model()
+    model2 = create_model()
     ema_model = create_model(ema=True)
 
     LOG.info(parameters_string(model))
 
     optimizer = torch.optim.SGD(model.parameters(), args.lr,
+                                momentum=args.momentum,
+                                weight_decay=args.weight_decay,
+                                nesterov=args.nesterov)
+    optimizer2 = torch.optim.SGD(model2.parameters(), args.lr,
                                 momentum=args.momentum,
                                 weight_decay=args.weight_decay,
                                 nesterov=args.nesterov)
@@ -87,8 +92,12 @@ def main(context):
         global_step = checkpoint['global_step']
         best_prec1 = checkpoint['best_prec1']
         model.load_state_dict(checkpoint['state_dict'])
+        if 'state_dict2' in checkpoint:
+            model2.load_state_dict(checkpoint['state_dict2'])
         ema_model.load_state_dict(checkpoint['ema_state_dict'])
         optimizer.load_state_dict(checkpoint['optimizer'])
+        if 'optimizer2' in checkpoint:
+            optimizer2.load_state_dict(checkpoint['optimizer2'])
         LOG.info("=> loaded checkpoint '{}' (epoch {})".format(args.resume, checkpoint['epoch']))
 
     cudnn.benchmark = True
@@ -103,13 +112,15 @@ def main(context):
     for epoch in range(args.start_epoch, args.epochs):
         start_time = time.time()
         # train for one epoch
-        train(train_loader, model, ema_model, optimizer, epoch, training_log)
+        train(train_loader, noise_loader, model, model2, ema_model, optimizer, optimizer2, epoch, training_log)
         LOG.info("--- training epoch in %s seconds ---" % (time.time() - start_time))
 
         if args.evaluation_epochs and (epoch + 1) % args.evaluation_epochs == 0:
             start_time = time.time()
             LOG.info("Evaluating the primary model:")
             prec1 = validate(eval_loader, model, validation_log, global_step, epoch + 1)
+            LOG.info("Evaluating the secondary model:")
+            prec1 = validate(eval_loader, model2, validation_log, global_step, epoch + 1)
             LOG.info("Evaluating the EMA model:")
             ema_prec1 = validate(eval_loader, ema_model, ema_validation_log, global_step, epoch + 1)
             LOG.info("--- validation in %s seconds ---" % (time.time() - start_time))
@@ -124,9 +135,11 @@ def main(context):
                 'global_step': global_step,
                 'arch': args.arch,
                 'state_dict': model.state_dict(),
+                'state_dict2': model2.state_dict(),
                 'ema_state_dict': ema_model.state_dict(),
                 'best_prec1': best_prec1,
                 'optimizer' : optimizer.state_dict(),
+                'optimizer2' : optimizer2.state_dict(),
             }, is_best, checkpoint_path, epoch + 1)
 
 
@@ -148,6 +161,7 @@ def parse_dict_args(**kwargs):
 
 
 def create_data_loaders(train_transformation,
+                        noise_transformation,
                         eval_transformation,
                         datadir,
                         args):
@@ -157,6 +171,7 @@ def create_data_loaders(train_transformation,
     assert_exactly_one([args.exclude_unlabeled, args.labeled_batch_size])
 
     dataset = torchvision.datasets.ImageFolder(traindir, train_transformation)
+    dataset2 = torchvision.datasets.ImageFolder(traindir, noise_transformation)
 
     if args.labels:
         with open(args.labels) as f:
@@ -176,7 +191,10 @@ def create_data_loaders(train_transformation,
                                                batch_sampler=batch_sampler,
                                                num_workers=args.workers,
                                                pin_memory=True)
-
+    noise_loader = torch.utils.data.DataLoader(dataset2,
+                                               batch_sampler=batch_sampler,
+                                               num_workers=args.workers,
+                                               pin_memory=True)
     eval_loader = torch.utils.data.DataLoader(
         torchvision.datasets.ImageFolder(evaldir, eval_transformation),
         batch_size=args.batch_size,
@@ -185,17 +203,17 @@ def create_data_loaders(train_transformation,
         pin_memory=True,
         drop_last=False)
 
-    return train_loader, eval_loader
+    return train_loader, noise_loader, eval_loader
 
 
-def update_ema_variables(model, ema_model, alpha, global_step):
+def update_ema_variables(model, model2, ema_model, alpha, global_step):
     # Use the true average until the exponential average is more correct
     alpha = min(1 - 1 / (global_step + 1), alpha)
-    for ema_param, param in zip(ema_model.parameters(), model.parameters()):
-        ema_param.data.mul_(alpha).add_(1 - alpha, param.data)
+    for ema_param, param, param2 in zip(ema_model.parameters(), model.parameters(), model2.parameters()):
+        ema_param.data.mul_(alpha).add_(1 - alpha, (param.data + param2.data) /2)
 
 
-def train(train_loader, model, ema_model, optimizer, epoch, log):
+def train(train_loader, noise_loader, model, model2, ema_model, optimizer, optimizer2, epoch, log):
     global global_step
 
     class_criterion = nn.CrossEntropyLoss(size_average=False, ignore_index=NO_LABEL).cuda()
@@ -212,16 +230,18 @@ def train(train_loader, model, ema_model, optimizer, epoch, log):
     # switch to train mode
     model.train()
     ema_model.train()
-
+    import copy
     end = time.time()
-    for i, ((input, ema_input), target) in enumerate(train_loader):
+    for i, (((input1, ema_input), target), ((input2, _), _)) in enumerate(zip(train_loader, noise_loader)):
         # measure data loading time
         meters.update('data_time', time.time() - end)
 
         adjust_learning_rate(optimizer, epoch, i, len(train_loader))
+        adjust_learning_rate(optimizer2, epoch, i, len(noise_loader))
         meters.update('lr', optimizer.param_groups[0]['lr'])
 
-        input_var = torch.autograd.Variable(input)
+        input1_var = torch.autograd.Variable(input1)
+        input2_var = torch.autograd.Variable(input2)
         with torch.no_grad():
             ema_input_var = torch.autograd.Variable(ema_input)
         target_var = torch.autograd.Variable(target.cuda())
@@ -232,29 +252,37 @@ def train(train_loader, model, ema_model, optimizer, epoch, log):
         meters.update('labeled_minibatch_size', labeled_minibatch_size)
 
         ema_model_out = ema_model(ema_input_var)
-        model_out = model(input_var)
+        model1_out = model(input1_var)
+        model2_out = model2(input2_var)
 
         if args.pseudo_label:
             pl = PL(n_classes=10, threshold=0.95, soft=args.soft)
             mask = (target_var == NO_LABEL).float()
-            if isinstance(model_out, tuple):
-                output = model_out[0]
+            if isinstance(model1_out, tuple):
+                output1 = model1_out[0]
+            if isinstance(model2_out, tuple):
+                output2 = model2_out[0]
             # ramp up exp(-5(1 - t)^2)
             coef = args.consis_coef * math.exp(-5 * (1 - min(global_step/args.warmup, 1))**2)
-            semi_loss = pl(input_var, output.detach(), model, mask) * coef
+            semi_loss = pl(input1_var, output1.detach(), model, mask) * coef
+            semi_loss2 = pl(input2_var, output2.detach(), model2, mask) * coef
             meters.update('semi_loss', semi_loss.item())
+            meters.update('semi_loss2', semi_loss2.item())
         else:
             coef = 0
             meters.update('semi_loss', 0.)
+            meters.update('semi_loss2', 0.)
 
-        if isinstance(model_out, Variable):
+        if isinstance(model1_out, Variable):
             assert args.logit_distance_cost < 0
-            logit1 = model_out
+            logit1 = model1_out
             ema_logit = ema_model_out
         else:
-            assert len(model_out) == 2
+            assert len(model1_out) == 2
+            assert len(model2_out) == 2
             assert len(ema_model_out) == 2
-            logit1, logit2 = model_out
+            logit1, logit2 = model1_out
+            logit2_1, logit2_2 = model2_out
             ema_logit, _ = ema_model_out
 
         ema_logit = Variable(ema_logit.detach().data, requires_grad=False)
@@ -263,12 +291,22 @@ def train(train_loader, model, ema_model, optimizer, epoch, log):
             class_logit, cons_logit = logit1, logit2
             res_loss = args.logit_distance_cost * residual_logit_criterion(class_logit, cons_logit) / minibatch_size
             meters.update('res_loss', res_loss.item())
+
+            class_logit2, cons_logit2 = logit2_1, logit2_2
+            res_loss2 = args.logit_distance_cost * residual_logit_criterion(class_logit2, cons_logit2) / minibatch_size
+            meters.update('res_loss2', res_loss.item())
+
         else:
             class_logit, cons_logit = logit1, logit1
+            class_logit2, cons_logit2 = logit2_1, logit2_1
             res_loss = 0
+            res_loss2 = 0
 
         class_loss = class_criterion(class_logit, target_var) / minibatch_size
         meters.update('class_loss', class_loss.item())
+
+        class_loss2 = class_criterion(class_logit2, target_var) / minibatch_size
+        meters.update('class_loss2', class_loss2.item())
 
         ema_class_loss = class_criterion(ema_logit, target_var) / minibatch_size
         meters.update('ema_class_loss', ema_class_loss.item())
@@ -278,31 +316,51 @@ def train(train_loader, model, ema_model, optimizer, epoch, log):
             meters.update('cons_weight', consistency_weight)
             consistency_loss = consistency_weight * consistency_criterion(cons_logit, ema_logit) / minibatch_size
             meters.update('cons_loss', consistency_loss.item())
+
+            consistency_loss2 = consistency_weight * consistency_criterion(cons_logit2, ema_logit) / minibatch_size
+            meters.update('cons_loss2', consistency_loss2.item())
+
+            share_loss = consistency_weight * consistency_criterion(cons_logit.detach(), cons_logit2) / minibatch_size
+            meters.update('share_loss', share_loss.item())
         else:
             consistency_loss = 0
-            meters.update('cons_loss', 0)
+            consistency_loss2 = 0
+            share_loss = 0
 
+            meters.update('cons_loss', 0)
+            meters.update('cons_loss2', 0)
+            meters.update('share_loss', 0)
+
+        #loss = class_loss + consistency_loss + res_loss + semi_loss
         loss = class_loss + consistency_loss + res_loss + semi_loss
+        loss2 = class_loss2 + consistency_loss2 + res_loss2 + semi_loss2 + share_loss
 
         # regularization for student model
         if args.reg is not None:
-           for name, param in model.named_parameters():
-               if 'bias' not in name:
-                   if args.reg.lower() == 'l1':
-                       loss += (args.reg_c * torch.sum(torch.abs(param)))
-                   elif args.reg.lower() == 'l2':
-                       loss += (args.reg_c * torch.sum(torch.pow(param, 2)))
-                   else:
-                       raise Exception(f'Unknown regularization: {reg}')
+           for sub_l, sub_m in zip([loss, loss2], [model, model2]):
+               for name, param in sub_m.named_parameters():
+                   if 'bias' not in name:
+                       if args.reg.lower() == 'l1':
+                           sub_l += (args.reg_c * torch.sum(torch.abs(param)))
+                       elif args.reg.lower() == 'l2':
+                           sub_l += (args.reg_c * torch.sum(torch.pow(param, 2)))
+                       else:
+                           raise Exception(f'Unknown regularization: {reg}')
 
         assert not (np.isnan(loss.item()) or loss.item() > 1e5), 'Loss explosion: {}'.format(loss.item())
         meters.update('loss', loss.item())
 
         prec1, prec5 = accuracy(class_logit.data, target_var.data, topk=(1, 5))
+        prec1_2, prec5_2 = accuracy(class_logit2.data, target_var.data, topk=(1, 5))
         meters.update('top1', prec1[0], labeled_minibatch_size)
         meters.update('error1', 100. - prec1[0], labeled_minibatch_size)
         meters.update('top5', prec5[0], labeled_minibatch_size)
         meters.update('error5', 100. - prec5[0], labeled_minibatch_size)
+
+        meters.update('top1(2)', prec1_2[0], labeled_minibatch_size)
+        meters.update('error1(2)', 100. - prec1_2[0], labeled_minibatch_size)
+        meters.update('top5(2)', prec5_2[0], labeled_minibatch_size)
+        meters.update('error5(2)', 100. - prec5_2[0], labeled_minibatch_size)
 
         ema_prec1, ema_prec5 = accuracy(ema_logit.data, target_var.data, topk=(1, 5))
         meters.update('ema_top1', ema_prec1[0], labeled_minibatch_size)
@@ -314,8 +372,13 @@ def train(train_loader, model, ema_model, optimizer, epoch, log):
         optimizer.zero_grad()
         loss.backward()
         optimizer.step()
+
+        optimizer2.zero_grad()
+        loss2.backward()
+        optimizer2.step()
         global_step += 1
-        update_ema_variables(model, ema_model, args.ema_decay, global_step)
+        #update_ema_variables(model, ema_model, args.ema_decay, global_step)
+        update_ema_variables(model, model2, ema_model, args.ema_decay, global_step)
 
         # measure elapsed time
         meters.update('batch_time', time.time() - end)
@@ -327,11 +390,18 @@ def train(train_loader, model, ema_model, optimizer, epoch, log):
                 'Time {meters[batch_time]:.3f}\t'
                 'Data {meters[data_time]:.3f}\t'
                 'Class {meters[class_loss]:.4f}\t'
+                'Class2 {meters[class_loss2]:.4f}\t'
                 'Semi {meters[semi_loss]:.4f}[{coef:.4f}]\t'
-                'Cons {meters[cons_loss]:.4f}\t'
+                'Semi2 {meters[semi_loss2]:.4f}[{coef:.4f}]\t'
+                'Cons {meters[cons_loss]:.4f}\r\n\t'
+                'Cons2 {meters[cons_loss2]:.4f}\t'
                 'Res {meters[res_loss]:.4f}\t'
-                'Prec@1 {meters[top1]:.3f}\t'
-                'Prec@5 {meters[top5]:.3f}'.format(
+                'Res2 {meters[res_loss2]:.4f}\t'
+                'Share {meters[share_loss]:.4f}\t'
+                'Acc@1 {meters[top1]:.3f}\t'
+                'Acc@1(2) {meters[top1(2)]:.3f}\t'
+                'Acc@5 {meters[top5]:.3f}\t'
+                'Acc@5(2) {meters[top5(2)]:.3f}'.format(
                     epoch, i, len(train_loader), meters=meters, coef=coef))
             log.record(epoch + i / len(train_loader), {
                 'step': global_step,
