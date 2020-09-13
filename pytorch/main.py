@@ -337,13 +337,19 @@ def train(train_loader, noise_loader, model, model2, ema_model, optimizer, optim
 
         # regularization for student model
         if args.reg is not None:
-           for sub_l, sub_m in zip([loss, loss2], [model, model2]):
+           for sub_l, sub_m in zip(['loss1', 'loss2'], [model, model2]):
                for name, param in sub_m.named_parameters():
                    if 'bias' not in name:
                        if args.reg.lower() == 'l1':
-                           sub_l += (args.reg_c * torch.sum(torch.abs(param)))
+                           if sub_l == 'loss1':
+                               loss += (args.reg_c * torch.sum(torch.abs(param)))
+                           elif sub_l == 'loss2':
+                               loss2 += (args.reg_c * torch.sum(torch.abs(param)))
                        elif args.reg.lower() == 'l2':
-                           sub_l += (args.reg_c * torch.sum(torch.pow(param, 2)))
+                           if sub_l == 'loss1':
+                               loss += (args.reg_c * torch.sum(torch.pow(param, 2)))
+                           elif sub_l == 'loss2':
+                               loss2 += (args.reg_c * torch.sum(torch.pow(param, 2)))
                        else:
                            raise Exception(f'Unknown regularization: {reg}')
 
