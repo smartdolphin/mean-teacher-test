@@ -48,7 +48,7 @@ def main(context):
 
     dataset_config = datasets.__dict__[args.dataset]()
     num_classes = dataset_config.pop('num_classes')
-    train_loader, noise_loader, eval_loader = create_data_loaders(**dataset_config, args=args)
+    train_loader, eval_loader = create_data_loaders(**dataset_config, args=args)
 
     def create_model(ema=False, reg=None):
         LOG.info("=> creating {pretrained}{ema}model '{arch}'".format(
@@ -60,6 +60,11 @@ def main(context):
         model_params = dict(pretrained=args.pretrained, num_classes=num_classes, dropout=args.dropout)
         if ema:
             model_params['dropout'] = 0.
+        def noise(x, std=0.2):
+            n = torch.randn_like(x) * std
+            x = n + x
+            return x
+        model_params['transform'] = noise
         model = model_factory(**model_params)
         model = nn.DataParallel(model).cuda()
 
@@ -112,7 +117,7 @@ def main(context):
     for epoch in range(args.start_epoch, args.epochs):
         start_time = time.time()
         # train for one epoch
-        train(train_loader, noise_loader, model, model2, ema_model, optimizer, optimizer2, epoch, training_log)
+        train(train_loader, model, model2, ema_model, optimizer, optimizer2, epoch, training_log)
         LOG.info("--- training epoch in %s seconds ---" % (time.time() - start_time))
 
         if args.evaluation_epochs and (epoch + 1) % args.evaluation_epochs == 0:
@@ -161,7 +166,6 @@ def parse_dict_args(**kwargs):
 
 
 def create_data_loaders(train_transformation,
-                        noise_transformation,
                         eval_transformation,
                         datadir,
                         args):
@@ -171,7 +175,6 @@ def create_data_loaders(train_transformation,
     assert_exactly_one([args.exclude_unlabeled, args.labeled_batch_size])
 
     dataset = torchvision.datasets.ImageFolder(traindir, train_transformation)
-    dataset2 = torchvision.datasets.ImageFolder(traindir, noise_transformation)
 
     if args.labels:
         with open(args.labels) as f:
@@ -191,10 +194,6 @@ def create_data_loaders(train_transformation,
                                                batch_sampler=batch_sampler,
                                                num_workers=args.workers,
                                                pin_memory=True)
-    noise_loader = torch.utils.data.DataLoader(dataset2,
-                                               batch_sampler=batch_sampler,
-                                               num_workers=args.workers,
-                                               pin_memory=True)
     eval_loader = torch.utils.data.DataLoader(
         torchvision.datasets.ImageFolder(evaldir, eval_transformation),
         batch_size=args.batch_size,
@@ -203,7 +202,7 @@ def create_data_loaders(train_transformation,
         pin_memory=True,
         drop_last=False)
 
-    return train_loader, noise_loader, eval_loader
+    return train_loader, eval_loader
 
 
 def update_ema_variables(model, model2, ema_model, alpha, global_step):
@@ -213,7 +212,7 @@ def update_ema_variables(model, model2, ema_model, alpha, global_step):
         ema_param.data.mul_(alpha).add_(1 - alpha, (param.data + param2.data) /2)
 
 
-def train(train_loader, noise_loader, model, model2, ema_model, optimizer, optimizer2, epoch, log):
+def train(train_loader, model, model2, ema_model, optimizer, optimizer2, epoch, log):
     global global_step
 
     class_criterion = nn.CrossEntropyLoss(size_average=False, ignore_index=NO_LABEL).cuda()
@@ -229,19 +228,19 @@ def train(train_loader, noise_loader, model, model2, ema_model, optimizer, optim
 
     # switch to train mode
     model.train()
+    model2.train()
     ema_model.train()
     import copy
     end = time.time()
-    for i, (((input1, ema_input), target), ((input2, _), _)) in enumerate(zip(train_loader, noise_loader)):
+    for i, ((input, ema_input), target) in enumerate(train_loader):
         # measure data loading time
         meters.update('data_time', time.time() - end)
 
         adjust_learning_rate(optimizer, epoch, i, len(train_loader))
-        adjust_learning_rate(optimizer2, epoch, i, len(noise_loader))
+        adjust_learning_rate(optimizer2, epoch, i, len(train_loader))
         meters.update('lr', optimizer.param_groups[0]['lr'])
 
-        input1_var = torch.autograd.Variable(input1)
-        input2_var = torch.autograd.Variable(input2)
+        input_var = torch.autograd.Variable(input)
         with torch.no_grad():
             ema_input_var = torch.autograd.Variable(ema_input)
         target_var = torch.autograd.Variable(target.cuda())
@@ -252,8 +251,8 @@ def train(train_loader, noise_loader, model, model2, ema_model, optimizer, optim
         meters.update('labeled_minibatch_size', labeled_minibatch_size)
 
         ema_model_out = ema_model(ema_input_var)
-        model1_out = model(input1_var)
-        model2_out = model2(input2_var)
+        model1_out = model(input_var)
+        model2_out = model2(input_var)
 
         if args.pseudo_label:
             pl = PL(n_classes=10, threshold=0.95, soft=args.soft)
@@ -264,8 +263,8 @@ def train(train_loader, noise_loader, model, model2, ema_model, optimizer, optim
                 output2 = model2_out[0]
             # ramp up exp(-5(1 - t)^2)
             coef = args.consis_coef * math.exp(-5 * (1 - min(global_step/args.warmup, 1))**2)
-            semi_loss = pl(input1_var, output1.detach(), model, mask) * coef
-            semi_loss2 = pl(input2_var, output2.detach(), model2, mask) * coef
+            semi_loss = pl(input_var, output1.detach(), model, mask) * coef
+            semi_loss2 = pl(input_var, output2.detach(), model2, mask) * coef
             meters.update('semi_loss', semi_loss.item())
             meters.update('semi_loss2', semi_loss2.item())
         else:
@@ -320,7 +319,7 @@ def train(train_loader, noise_loader, model, model2, ema_model, optimizer, optim
             consistency_loss2 = consistency_weight * consistency_criterion(cons_logit2, ema_logit) / minibatch_size
             meters.update('cons_loss2', consistency_loss2.item())
 
-            share_loss = consistency_weight * consistency_criterion(cons_logit.detach(), cons_logit2) / minibatch_size
+            share_loss = consistency_criterion(cons_logit.detach(), cons_logit2) / minibatch_size
             meters.update('share_loss', share_loss.item())
         else:
             consistency_loss = 0

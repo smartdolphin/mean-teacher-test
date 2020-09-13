@@ -122,10 +122,11 @@ class ResNet224x224(nn.Module):
 
 class ResNet32x32(nn.Module):
     def __init__(self, block, layers, channels, groups=1, num_classes=1000, downsample='basic',
-                 dropout=0.):
+                 dropout=0., transform=None):
         super().__init__()
         assert len(layers) == 3
         self.downsample_mode = downsample
+        self.transform = transform
         self.inplanes = 16
         self.conv1 = nn.Conv2d(3, 16, kernel_size=3, stride=1,
                                padding=1, bias=False)
@@ -177,6 +178,8 @@ class ResNet32x32(nn.Module):
         return nn.Sequential(*layers)
 
     def forward(self, x):
+        if self.training and self.transform is not None:
+            x = self.transform(x)
         x = self.conv1(x)
         x = self.layer1(x)
         x = self.layer2(x)

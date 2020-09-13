@@ -61,13 +61,6 @@ def cifar10():
         transforms.ToTensor(),
         transforms.Normalize(**channel_stats)
     ]))
-    noise_transformation = data.TransformTwice(transforms.Compose([
-        data.RandomTranslateWithReflect(4),
-        transforms.RandomHorizontalFlip(),
-        transforms.ToTensor(),
-        GaussianNoise(0., 0.15),
-        transforms.Normalize(**channel_stats),
-    ]))
     eval_transformation = transforms.Compose([
         transforms.ToTensor(),
         transforms.Normalize(**channel_stats)
@@ -75,7 +68,6 @@ def cifar10():
 
     return {
         'train_transformation': train_transformation,
-        'noise_transformation': noise_transformation,
         'eval_transformation': eval_transformation,
         'datadir': 'data-local/images/cifar/cifar10/by-image',
         'num_classes': 10
