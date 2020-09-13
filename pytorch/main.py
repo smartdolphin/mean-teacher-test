@@ -50,7 +50,7 @@ def main(context):
     num_classes = dataset_config.pop('num_classes')
     train_loader, eval_loader = create_data_loaders(**dataset_config, args=args)
 
-    def create_model(ema=False, reg=None):
+    def create_model(ema=False, reg=None, is_noise=False):
         LOG.info("=> creating {pretrained}{ema}model '{arch}'".format(
             pretrained='pre-trained ' if args.pretrained is not None else '',
             ema='EMA ' if ema else '',
@@ -60,11 +60,12 @@ def main(context):
         model_params = dict(pretrained=args.pretrained, num_classes=num_classes, dropout=args.dropout)
         if ema:
             model_params['dropout'] = 0.
-        def noise(x, std=0.2):
-            n = torch.randn_like(x) * std
-            x = n + x
-            return x
-        model_params['transform'] = noise
+        if is_noise:
+            def noise(x, std=0.2):
+                n = torch.randn_like(x) * std
+                x = n + x
+                return x
+            model_params['transform'] = noise
         model = model_factory(**model_params)
         model = nn.DataParallel(model).cuda()
 
@@ -74,7 +75,7 @@ def main(context):
         return model
 
     model = create_model()
-    model2 = create_model()
+    model2 = create_model(is_noise=True)
     ema_model = create_model(ema=True)
 
     LOG.info(parameters_string(model))
