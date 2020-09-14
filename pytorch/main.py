@@ -270,6 +270,8 @@ def train(train_loader, model, model2, ema_model, optimizer, optimizer2, epoch, 
             meters.update('semi_loss2', semi_loss2.item())
         else:
             coef = 0
+            semi_loss = 0
+            semi_loss2 = 0
             meters.update('semi_loss', 0.)
             meters.update('semi_loss2', 0.)
 
